@@ -1,0 +1,86 @@
+[
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "11:03",
+    "data": "26/04/2026",
+    "azione": "Bloccata"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "11:02",
+    "data": "26/04/2026",
+    "azione": "Aperta"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "11:23",
+    "data": "24/04/2026",
+    "azione": "Aperta"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "11:23",
+    "data": "24/04/2026",
+    "azione": "Bloccata"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "11:23",
+    "data": "24/04/2026",
+    "azione": "Aperta"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "11:22",
+    "data": "24/04/2026",
+    "azione": "Bloccata"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "11:22",
+    "data": "24/04/2026",
+    "azione": "Aperta"
+  },
+  {
+    "username": "Claudio",
+    "tag_id": "APP",
+    "orario": "09:13",
+    "data": "24/04/2026",
+    "azione": "Aperta"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "09:07",
+    "data": "24/04/2026",
+    "azione": "Bloccata"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "09:06",
+    "data": "24/04/2026",
+    "azione": "Aperta"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "23:06",
+    "data": "23/04/2026",
+    "azione": "Bloccata"
+  },
+  {
+    "username": "admin",
+    "tag_id": "APP",
+    "orario": "23:05",
+    "data": "23/04/2026",
+    "azione": "Aperta"
+  }
+]

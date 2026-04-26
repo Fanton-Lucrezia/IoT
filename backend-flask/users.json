@@ -1,0 +1,12 @@
+{
+  "admin": {
+    "password": "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918",
+    "role": "admin",
+    "has_door_access": true
+  },
+  "Claudio": {
+    "password": "f799d5bb9e4c756282856d18453a785cc881e65ddeed18e9290ac8de0c47ad2d",
+    "role": "user",
+    "has_door_access": true
+  }
+}
