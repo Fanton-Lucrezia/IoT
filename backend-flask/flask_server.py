@@ -22,7 +22,7 @@ ADMIN_PASSWORD = "admin"  # ← Cambia in produzione
 # ══════════════════════════════════════════════
 # CONNESSIONE MONGODB
 # ══════════════════════════════════════════════
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://mongo:CCVLWSOtgsVPCbUPZbUoJIIKnXbBqSYo@mongodb.railway.internal:27017")
 
 client = MongoClient(MONGO_URL)
 db     = client["doormotic"]          # Nome del database
