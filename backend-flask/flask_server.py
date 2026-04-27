@@ -56,7 +56,7 @@ def init_db():
 
 def get_username_by_tag(tag_id: str) -> str:
     user = users_col.find_one({"rfid_tag": tag_id})
-    return user["username"] if user else "Sconosciuto"
+    return user["username"] if user else "Sconosciuto/Tag"
 
 def add_access_log(username: str, tag_id: str, is_bloccata: bool):
     accesses_col.insert_one({
