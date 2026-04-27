@@ -1,19 +1,12 @@
 """
-DOORmotic - Flask Server
-========================
-Avvio: python flask_server.py
-Accesso admin di default: username=admin, password=admin
-
-Per migrare a MySQL con XAMPP:
-  Sostituire le funzioni load_users()/save_users() e load_accesses()/save_accesses()
-  con query pymysql. Il resto del codice rimane identico.
+DOORmotic - Flask Server con MongoDB
 """
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from datetime import datetime
+from pymongo import MongoClient, DESCENDING
 import hashlib
-import json
 import os
 
 app = Flask(__name__)
@@ -22,67 +15,52 @@ CORS(app)
 # ══════════════════════════════════════════════
 # CONFIGURAZIONE
 # ══════════════════════════════════════════════
-SECRET_CODE    = "DOORMOTIC2026"   # ← Codice segreto da mettere nel QR
+SECRET_CODE    = "DOORMOTIC2026"
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin"           # ← Cambia in produzione
+ADMIN_PASSWORD = "admin"  # ← Cambia in produzione
 
-USERS_FILE    = "users.json"
-ACCESSES_FILE = "accesses.json"
+# ══════════════════════════════════════════════
+# CONNESSIONE MONGODB
+# ══════════════════════════════════════════════
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+
+client = MongoClient(MONGO_URL)
+db     = client["doormotic"]          # Nome del database
+
+users_col    = db["users"]            # Collezione utenti
+accesses_col = db["accesses"]         # Collezione accessi
 
 door_state = {"aperta": False}
 
 
 # ══════════════════════════════════════════════
-# DATABASE (JSON)
+# UTILITY
 # ══════════════════════════════════════════════
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def init_db():
-    if not os.path.exists(USERS_FILE):
-        users = {
-            ADMIN_USERNAME: {
-                "password": hash_password(ADMIN_PASSWORD),
-                "role": "admin",
-                "has_door_access": True
-            }
-        }
-        with open(USERS_FILE, "w") as f:
-            json.dump(users, f, indent=2)
-        print(f"[DB] Creato {USERS_FILE} con utente admin")
-
-    if not os.path.exists(ACCESSES_FILE):
-        with open(ACCESSES_FILE, "w") as f:
-            json.dump([], f)
-        print(f"[DB] Creato {ACCESSES_FILE}")
-
-def load_users() -> dict:
-    with open(USERS_FILE, "r") as f:
-        return json.load(f)
-
-def save_users(users: dict):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2)
-
-def load_accesses() -> list:
-    with open(ACCESSES_FILE, "r") as f:
-        return json.load(f)
-
-def save_accesses(accesses: list):
-    with open(ACCESSES_FILE, "w") as f:
-        json.dump(accesses, f, indent=2)
+    """Crea l'utente admin se non esiste già."""
+    if users_col.find_one({"username": ADMIN_USERNAME}) is None:
+        users_col.insert_one({
+            "username":        ADMIN_USERNAME,
+            "password":        hash_password(ADMIN_PASSWORD),
+            "role":            "admin",
+            "has_door_access": True
+        })
+        print(f"[DB] Utente admin creato")
+    else:
+        print(f"[DB] Utente admin già esistente")
 
 def add_access_log(username: str, tag_id: str, azione: str):
-    accesses = load_accesses()
-    accesses.insert(0, {
+    accesses_col.insert_one({
         "username": username,
-        "tag_id": tag_id,
-        "orario": datetime.now().strftime("%H:%M"),
-        "data": datetime.now().strftime("%d/%m/%Y"),
-        "azione": azione
+        "tag_id":   tag_id,
+        "orario":   datetime.now().strftime("%H:%M"),
+        "data":     datetime.now().strftime("%d/%m/%Y"),
+        "azione":   azione
     })
-    save_accesses(accesses)
 
 
 # ══════════════════════════════════════════════
@@ -91,30 +69,29 @@ def add_access_log(username: str, tag_id: str, azione: str):
 
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.json or {}
+    data     = request.json or {}
     username = data.get("username", "").strip()
     password = data.get("password", "")
 
-    users = load_users()
+    user = users_col.find_one({"username": username})
 
-    if username not in users:
+    if not user:
         return jsonify({"success": False, "message": "Utente non trovato"}), 401
 
-    user = users[username]
     if user["password"] != hash_password(password):
         return jsonify({"success": False, "message": "Password errata"}), 401
 
     return jsonify({
-        "success": True,
-        "username": username,
-        "role": user["role"],
+        "success":         True,
+        "username":        username,
+        "role":            user["role"],
         "has_door_access": user["has_door_access"]
     })
 
 
 @app.route("/register", methods=["POST"])
 def register():
-    data = request.json or {}
+    data        = request.json or {}
     username    = data.get("username", "").strip()
     password    = data.get("password", "")
     secret_code = data.get("secret_code", "").strip()
@@ -125,24 +102,21 @@ def register():
     if len(password) < 6:
         return jsonify({"success": False, "message": "Password troppo corta (min 6 caratteri)"}), 400
 
-    users = load_users()
-
-    if username in users:
+    if users_col.find_one({"username": username}):
         return jsonify({"success": False, "message": "Username già in uso"}), 400
 
     has_access = (secret_code == SECRET_CODE)
 
-    users[username] = {
-        "password": hash_password(password),
-        "role": "user",
+    users_col.insert_one({
+        "username":        username,
+        "password":        hash_password(password),
+        "role":            "user",
         "has_door_access": has_access
-    }
-    save_users(users)
+    })
 
-    if has_access:
-        msg = "Registrazione completata! Hai accesso alla porta."
-    else:
-        msg = "Registrazione completata. Senza codice valido non puoi aprire la porta."
+    msg = ("Registrazione completata! Hai accesso alla porta."
+           if has_access else
+           "Registrazione completata. Senza codice valido non puoi aprire la porta.")
 
     return jsonify({"success": True, "message": msg, "has_door_access": has_access})
 
@@ -181,17 +155,20 @@ def chiudi_porta():
 
 @app.route("/accessi", methods=["GET"])
 def get_accessi():
-    return jsonify(load_accesses())
+    docs = list(
+        accesses_col.find({}, {"_id": 0}).sort("_id", DESCENDING)
+    )
+    return jsonify(docs)
 
 
 @app.route("/accessi/count", methods=["GET"])
 def get_accessi_count():
-    return jsonify({"count": len(load_accesses())})
+    return jsonify({"count": accesses_col.count_documents({})})
 
 
 @app.route("/nuovo_accesso", methods=["POST"])
 def nuovo_accesso():
-    data = request.json or {}
+    data   = request.json or {}
     tag_id = data.get("id", "UNKNOWN")
     door_state["aperta"] = not door_state["aperta"]
     azione = "Aperta" if door_state["aperta"] else "Bloccata"
@@ -206,7 +183,7 @@ def nuovo_accesso():
 if __name__ == "__main__":
     init_db()
     print(f"\n{'='*40}")
-    print(f"  DOORmotic Server avviato")
+    print(f"  DOORmotic Server avviato (MongoDB)")
     print(f"  Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
     print(f"  Codice segreto QR: {SECRET_CODE}")
     print(f"{'='*40}\n")
