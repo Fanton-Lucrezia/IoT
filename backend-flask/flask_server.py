@@ -17,18 +17,19 @@ CORS(app)
 # ══════════════════════════════════════════════
 SECRET_CODE    = "DOORMOTIC2026"
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin"  # ← Cambia in produzione
+ADMIN_PASSWORD = "admin"
 
 # ══════════════════════════════════════════════
 # CONNESSIONE MONGODB
 # ══════════════════════════════════════════════
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://mongo:CCVLWSOtgsVPCbUPZbUoJIIKnXbBqSYo@mongodb.railway.internal:27017")
 
-client = MongoClient(MONGO_URL)
-db     = client["doormotic"]          # Nome del database
+print(f"[DB] Connessione a: {MONGO_URL[:40]}...")
 
-users_col    = db["users"]            # Collezione utenti
-accesses_col = db["accesses"]         # Collezione accessi
+client       = MongoClient(MONGO_URL)
+db           = client["doormotic"]
+users_col    = db["users"]
+accesses_col = db["accesses"]
 
 door_state = {"aperta": False}
 
@@ -41,25 +42,28 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def init_db():
-    """Crea l'utente admin se non esiste già."""
     if users_col.find_one({"username": ADMIN_USERNAME}) is None:
         users_col.insert_one({
             "username":        ADMIN_USERNAME,
             "password":        hash_password(ADMIN_PASSWORD),
-            "role":            "admin",
-            "has_door_access": True
+            "is_admin":        True,
+            "has_door_access": True,
+            "rfid_tag":        None
         })
-        print(f"[DB] Utente admin creato")
+        print("[DB] Utente admin creato")
     else:
-        print(f"[DB] Utente admin già esistente")
+        print("[DB] Utente admin già esistente")
 
-def add_access_log(username: str, tag_id: str, azione: str):
+def get_username_by_tag(tag_id: str) -> str:
+    user = users_col.find_one({"rfid_tag": tag_id})
+    return user["username"] if user else "Sconosciuto"
+
+def add_access_log(username: str, tag_id: str, is_bloccata: bool):
     accesses_col.insert_one({
-        "username": username,
-        "tag_id":   tag_id,
-        "orario":   datetime.now().strftime("%H:%M"),
-        "data":     datetime.now().strftime("%d/%m/%Y"),
-        "azione":   azione
+        "username":    username,
+        "tag_id":      tag_id,
+        "timestamp":   datetime.now().isoformat(),
+        "is_bloccata": is_bloccata
     })
 
 
@@ -84,8 +88,9 @@ def login():
     return jsonify({
         "success":         True,
         "username":        username,
-        "role":            user["role"],
-        "has_door_access": user["has_door_access"]
+        "is_admin":        user["is_admin"],
+        "has_door_access": user["has_door_access"],
+        "rfid_tag":        user.get("rfid_tag")
     })
 
 
@@ -110,8 +115,9 @@ def register():
     users_col.insert_one({
         "username":        username,
         "password":        hash_password(password),
-        "role":            "user",
-        "has_door_access": has_access
+        "is_admin":        False,
+        "has_door_access": has_access,
+        "rfid_tag":        None
     })
 
     msg = ("Registrazione completata! Hai accesso alla porta."
@@ -119,6 +125,66 @@ def register():
            "Registrazione completata. Senza codice valido non puoi aprire la porta.")
 
     return jsonify({"success": True, "message": msg, "has_door_access": has_access})
+
+
+# ══════════════════════════════════════════════
+# ENDPOINTS — UTENTI (ADMIN)
+# ══════════════════════════════════════════════
+
+@app.route("/users", methods=["GET"])
+def get_users():
+    """Ritorna tutti gli utenti (senza password)."""
+    docs = list(users_col.find({}, {"_id": 0, "password": 0}))
+    return jsonify(docs)
+
+
+@app.route("/assign_tag", methods=["POST"])
+def assign_tag():
+    """Assegna un UID RFID a un utente esistente."""
+    data     = request.json or {}
+    username = data.get("username", "").strip()
+    rfid_tag = data.get("rfid_tag", "").strip()
+
+    if not username or not rfid_tag:
+        return jsonify({"success": False, "message": "username e rfid_tag obbligatori"}), 400
+
+    # Controlla che il tag non sia già assegnato a qualcun altro
+    existing = users_col.find_one({"rfid_tag": rfid_tag})
+    if existing and existing["username"] != username:
+        return jsonify({
+            "success": False,
+            "message": f"Tag già assegnato a {existing['username']}"
+        }), 400
+
+    result = users_col.update_one(
+        {"username": username},
+        {"$set": {"rfid_tag": rfid_tag}}
+    )
+
+    if result.matched_count == 0:
+        return jsonify({"success": False, "message": "Utente non trovato"}), 404
+
+    return jsonify({"success": True, "message": f"Tag {rfid_tag} assegnato a {username}"})
+
+
+@app.route("/remove_tag", methods=["POST"])
+def remove_tag():
+    """Rimuove l'associazione tag RFID da un utente."""
+    data     = request.json or {}
+    username = data.get("username", "").strip()
+
+    if not username:
+        return jsonify({"success": False, "message": "username obbligatorio"}), 400
+
+    result = users_col.update_one(
+        {"username": username},
+        {"$set": {"rfid_tag": None}}
+    )
+
+    if result.matched_count == 0:
+        return jsonify({"success": False, "message": "Utente non trovato"}), 404
+
+    return jsonify({"success": True, "message": f"Tag rimosso da {username}"})
 
 
 # ══════════════════════════════════════════════
@@ -133,19 +199,19 @@ def get_stato():
 
 @app.route("/apri_porta", methods=["POST"])
 def apri_porta():
-    data = request.json or {}
+    data     = request.json or {}
     username = data.get("username", "Utente")
     door_state["aperta"] = True
-    add_access_log(username, "APP", "Aperta")
+    add_access_log(username, "APP", is_bloccata=False)
     return "OK", 200
 
 
 @app.route("/chiudi_porta", methods=["POST"])
 def chiudi_porta():
-    data = request.json or {}
+    data     = request.json or {}
     username = data.get("username", "Utente")
     door_state["aperta"] = False
-    add_access_log(username, "APP", "Bloccata")
+    add_access_log(username, "APP", is_bloccata=True)
     return "OK", 200
 
 
@@ -168,11 +234,15 @@ def get_accessi_count():
 
 @app.route("/nuovo_accesso", methods=["POST"])
 def nuovo_accesso():
+    """Chiamato dall'Arduino/ESP quando legge un tag RFID."""
     data   = request.json or {}
     tag_id = data.get("id", "UNKNOWN")
+
+    # Cerca a chi appartiene il tag
+    username = get_username_by_tag(tag_id)
+
     door_state["aperta"] = not door_state["aperta"]
-    azione = "Aperta" if door_state["aperta"] else "Bloccata"
-    add_access_log("RFID", tag_id, azione)
+    add_access_log(username, tag_id, is_bloccata=not door_state["aperta"])
     return "OK", 200
 
 
