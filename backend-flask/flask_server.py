@@ -110,6 +110,21 @@ def count_accesses():
         return db["accesses"].count_documents({})
     return len(_ram_accesses)
 
+def get_current_door_state():
+    if db is not None:
+        last = db["accesses"].find_one(
+            {},
+            sort=[("timestamp", -1)]
+        )
+        if not last:
+            return False
+        return last.get("azione") == "Aperta"
+
+    # fallback RAM
+    if not _ram_accesses:
+        return False
+    return _ram_accesses[0].get("azione") == "Aperta"
+
 
 # ── Init admin ────────────────────────────────────────────────────────────────
 def init_admin():
@@ -170,24 +185,26 @@ def register():
 # ── Endpoints: Porta ──────────────────────────────────────────────────────────
 @app.route("/stato_porta", methods=["GET"])
 def get_stato():
-    return jsonify({"stato": "Aperta" if door_state["aperta"] else "Bloccata"})
+    stato = get_current_door_state()
+    return jsonify({
+        "stato": "Aperta" if stato else "Bloccata"
+    })
 
 @app.route("/apri_porta", methods=["POST"])
 def apri_porta():
     username = (request.json or {}).get("username", "Utente")
-    door_state["aperta"] = True
+
     add_access_log(username, "APP", "Aperta")
-    print(f"[PORTA] Aperta da {username}")
+
     return "OK", 200
 
 @app.route("/chiudi_porta", methods=["POST"])
 def chiudi_porta():
     username = (request.json or {}).get("username", "Utente")
-    door_state["aperta"] = False
-    add_access_log(username, "APP", "Bloccata")
-    print(f"[PORTA] Bloccata da {username}")
-    return "OK", 200
 
+    add_access_log(username, "APP", "Bloccata")
+
+    return "OK", 200
 
 # ── Endpoints: Accessi ────────────────────────────────────────────────────────
 @app.route("/accessi", methods=["GET"])
@@ -201,10 +218,15 @@ def get_accessi_count():
 @app.route("/nuovo_accesso", methods=["POST"])
 def nuovo_accesso():
     tag_id = (request.json or {}).get("id", "UNKNOWN")
-    door_state["aperta"] = not door_state["aperta"]
-    azione = "Aperta" if door_state["aperta"] else "Bloccata"
+
+    stato_attuale = get_current_door_state()
+
+    # toggle basato su ultimo stato
+    nuovo_stato = not stato_attuale
+    azione = "Aperta" if nuovo_stato else "Bloccata"
+
     add_access_log("RFID", tag_id, azione)
-    print(f"[RFID] Tag {tag_id} → {azione}")
+
     return "OK", 200
 
 # ── Avvio ─────────────────────────────────────────────────────────────────────
