@@ -14,6 +14,7 @@ import json
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import hashlib
 
 from pymongo import MongoClient
@@ -75,7 +76,7 @@ def save_user(username: str, data: dict):
         _ram_users[username] = data
 
 def add_access_log(username: str, tag_id: str, azione: str):
-    now = datetime.utcnow()
+    now = datetime.now(ZoneInfo("Europe/Rome"))
     entry = {
         "username":  username,
         "tag_id":    tag_id,
