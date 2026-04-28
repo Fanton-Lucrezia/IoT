@@ -22,7 +22,9 @@ ADMIN_PASSWORD = "admin"
 # ══════════════════════════════════════════════
 # CONNESSIONE MONGODB
 # ══════════════════════════════════════════════
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://mongo:CCVLWSOtgsVPCbUPZbUoJIIKnXbBqSYo@mongodb.railway.internal:27017")
+#MONGO_URL = os.environ.get("MONGO_URL", "mongodb://mongo:CCVLWSOtgsVPCbUPZbUoJIIKnXbBqSYo@mongodb.railway.internal:27017")
+
+MONGO_URL = os.environ.get("MONGO_URL")
 
 print(f"[DB] Connessione a: {MONGO_URL[:40]}...")
 
