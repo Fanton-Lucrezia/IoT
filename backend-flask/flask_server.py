@@ -207,25 +207,6 @@ def nuovo_accesso():
     print(f"[RFID] Tag {tag_id} → {azione}")
     return "OK", 200
 
-
-
-# ── Endpoint DEBUG (rimuovi dopo aver risolto) ───────────────────────────────
-@app.route("/debug_admin", methods=["GET"])
-def debug_admin():
-    user = get_user(ADMIN_USERNAME)
-    if user is None:
-        return jsonify({"error": "admin NON trovato in DB"})
-    return jsonify({
-        "found":            True,
-        "username":         user.get("_id"),
-        "role":             user.get("role"),
-        "has_door_access":  user.get("has_door_access"),
-        "hash_in_db":       user.get("password"),
-        "hash_expected":    __import__("hashlib").sha256(ADMIN_PASSWORD.encode()).hexdigest(),
-        "passwords_match":  user.get("password") == __import__("hashlib").sha256(ADMIN_PASSWORD.encode()).hexdigest(),
-        "ADMIN_PASSWORD_env": ADMIN_PASSWORD
-    })
-
 # ── Avvio ─────────────────────────────────────────────────────────────────────
 init_admin()
 
