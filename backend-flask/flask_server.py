@@ -113,14 +113,16 @@ def count_accesses():
 
 # ── Init admin ────────────────────────────────────────────────────────────────
 def init_admin():
-    if get_user(ADMIN_USERNAME) is None:
-        save_user(ADMIN_USERNAME, {
-            "_id":             ADMIN_USERNAME,
-            "password":        hash_password(ADMIN_PASSWORD),
-            "role":            "admin",
-            "has_door_access": True
-        })
-        print(f"[DB] Creato utente admin '{ADMIN_USERNAME}'")
+    # Aggiorna SEMPRE la password admin all'avvio: cosi' se cambia
+    # ADMIN_PASS su Railway si sincronizza subito con MongoDB
+    admin_data = {
+        "_id":             ADMIN_USERNAME,
+        "password":        hash_password(ADMIN_PASSWORD),
+        "role":            "admin",
+        "has_door_access": True
+    }
+    save_user(ADMIN_USERNAME, admin_data)
+    print(f"[DB] Admin '{ADMIN_USERNAME}' pronto (password sincronizzata)")
 
 
 # ── Endpoints: Autenticazione ─────────────────────────────────────────────────
