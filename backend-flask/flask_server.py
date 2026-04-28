@@ -236,4 +236,7 @@ if __name__ == "__main__":
     print(f"  Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
     print(f"  Codice QR: {SECRET_CODE}")
     print(f"{'='*45}\n")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+    #app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
