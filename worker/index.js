@@ -129,3 +129,4 @@ async function handleRfidMessage(rawPayload) {
     console.log(`  Risponde su: ${TOPIC_OUT}`);
     console.log("══════════════════════════════════\n");
 })();
+//modifica
