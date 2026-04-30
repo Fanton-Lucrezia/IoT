@@ -92,8 +92,6 @@ def add_access_log(username, tag_id, azione, source="APP"):
     entry = {
         "username":  username,
         "tag_id":    tag_id,
-        "orario":    now.strftime("%H:%M"),
-        "data":      now.strftime("%d/%m/%Y"),
         "azione":    azione,
         "source":    source,
         "timestamp": now
@@ -105,12 +103,18 @@ def add_access_log(username, tag_id, azione, source="APP"):
         _ram_access.insert(0, {k:v for k,v in entry.items() if k!="timestamp"})
 
 def get_accesses_list(limit=5):
-    # FIX: confronta con None invece di usare db come booleano
     if db is not None:
-        return list(db["accesses"]
-                    .find({}, {"_id": 0, "timestamp": 0})
+        docs = list(db["accesses"]
+                    .find({}, {"_id": 0})
                     .sort("timestamp", -1)
                     .limit(limit))
+        # Ricava orario e data da timestamp per compatibilità con l'app Android
+        for doc in docs:
+            ts = doc.pop("timestamp", None)
+            if ts:
+                doc["orario"] = ts.strftime("%H:%M")
+                doc["data"]   = ts.strftime("%d/%m/%Y")
+        return docs
     return _ram_access[:limit]
 
 # ── Init admin ────────────────────────────────────────────────────────────────

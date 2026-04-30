@@ -64,8 +64,6 @@ async function saveLog(tag, azione) {
     await db.collection("accesses").insertOne({
         username:  tag.label,
         tag_id:    tag.tag_id,
-        orario:    now.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
-        data:      now.toLocaleDateString("it-IT"),
         azione:    azione,
         source:    "RFID",
         timestamp: now
