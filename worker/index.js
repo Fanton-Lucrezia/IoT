@@ -136,7 +136,8 @@ async function handleRfidMessage(rawPayload) {
     // ── Accesso CONSENTITO: inverti lo stato ────────────────────
     // Se porta è chiusa (false) → manda "apri"
     // Se porta è aperta (true)  → manda "chiudi"
-    if (!statoAttuale) {
+
+    if (statoAttuale) {
         await saveLog(tag, "Aperta");
         mqttClient.publish(TOPIC_OUT, "apri");
         console.log(`✅ ${tag.label} → Porta APERTA | Pubblicato: apri → ${TOPIC_OUT}`);
