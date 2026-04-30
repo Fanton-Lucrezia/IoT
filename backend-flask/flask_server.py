@@ -152,17 +152,11 @@ def login():
         return jsonify({"success": False, "message": "Utente non trovato"}), 401
     if user["password"] != hash_password(password):
         return jsonify({"success": False, "message": "Password errata"}), 401
-    role = user.get("role")
-    is_admin = user.get("is_admin")
-
-    # fallback intelligente
-    if is_admin is None:
-        is_admin = (role == "admin")
 
     return jsonify({
         "success": True,
         "username": username,
-        "is_admin": is_admin,
+        "is_admin": user.get("is_admin", False),
         "has_door_access": user["has_door_access"]
     })
 
