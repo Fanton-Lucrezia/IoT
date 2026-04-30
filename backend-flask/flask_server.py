@@ -172,7 +172,7 @@ def apri_porta():
     username = (request.json or {}).get("username", "Utente")
     door_state["aperta"] = True
     add_access_log(username, "APP", "Aperta")
-    mqtt_publish("apri")
+    mqtt_publish("true")
     return "OK", 200
 
 @app.route("/chiudi_porta", methods=["POST"])
@@ -180,7 +180,7 @@ def chiudi_porta():
     username = (request.json or {}).get("username", "Utente")
     door_state["aperta"] = False
     add_access_log(username, "APP", "Bloccata")
-    mqtt_publish("chiudi")
+    mqtt_publish("true")
     return "OK", 200
 
 # ── Accessi ───────────────────────────────────────────────────────────────────
