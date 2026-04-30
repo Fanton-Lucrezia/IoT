@@ -103,7 +103,7 @@ async function handleRfidMessage(rawPayload) {
 
     // L'ESP32 gestisce apri/chiudi autonomamente in base al suo stato interno.
     // Il log registra l'azione che l'ESP32 sta per fare (opposta allo stato attuale).
-    const azioneLog = statoAttuale ? "Bloccata" : "Aperta";
+    const azioneLog = statoAttuale ? "Aperta" : "Bloccata";
     await saveLog(tag, azioneLog);
     mqttClient.publish(TOPIC_OUT, "true");
     console.log(`✅ ${tag.label} (${uid}) → autorizzato | Pubblicato: true → ${TOPIC_OUT}`);
