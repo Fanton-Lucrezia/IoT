@@ -134,7 +134,7 @@ def init_admin():
     admin_data = {
         "_id":             ADMIN_USERNAME,
         "password":        hash_password(ADMIN_PASSWORD),
-        "role":            "admin",
+        "is_admin":            True,
         "has_door_access": True
     }
     save_user(ADMIN_USERNAME, admin_data)
@@ -152,10 +152,17 @@ def login():
         return jsonify({"success": False, "message": "Utente non trovato"}), 401
     if user["password"] != hash_password(password):
         return jsonify({"success": False, "message": "Password errata"}), 401
+    role = user.get("role")
+    is_admin = user.get("is_admin")
+
+    # fallback intelligente
+    if is_admin is None:
+        is_admin = (role == "admin")
+
     return jsonify({
-        "success":         True,
-        "username":        username,
-        "role":            user["role"],
+        "success": True,
+        "username": username,
+        "is_admin": is_admin,
         "has_door_access": user["has_door_access"]
     })
 
@@ -175,7 +182,7 @@ def register():
     save_user(username, {
         "_id":             username,
         "password":        hash_password(password),
-        "role":            "user",
+        "is_admin":            True,
         "has_door_access": has_access
     })
     msg = "Registrazione completata! Hai accesso alla porta." if has_access \
