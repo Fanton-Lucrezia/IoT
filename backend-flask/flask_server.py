@@ -24,7 +24,7 @@ MQTT_BROKER    = os.environ.get("MQTT_BROKER",   "")
 MQTT_PORT      = int(os.environ.get("MQTT_PORT", "8883"))
 MQTT_USER      = os.environ.get("MQTT_USER",     "")
 MQTT_PASSWORD  = os.environ.get("MQTT_PASSWORD", "")
-TOPIC_OUT      = "door/comandi/porta1"
+TOPIC_OUT      = "doormotic/comandi/porta1"
 
 # ── MongoDB ───────────────────────────────────────────────────────────────────
 db = None
@@ -77,11 +77,15 @@ def json_resp(data):
     return Response(json.dumps(data, default=safe_json), mimetype="application/json")
 
 def get_user(username):
-    return db["users"].find_one({"_id": username}) if db else _ram_users.get(username)
+    # FIX: confronta con None invece di usare db come booleano
+    return db["users"].find_one({"_id": username}) if db is not None else _ram_users.get(username)
 
 def save_user(username, data):
-    if db: db["users"].update_one({"_id": username}, {"$set": data}, upsert=True)
-    else:  _ram_users[username] = data
+    # FIX: confronta con None invece di usare db come booleano
+    if db is not None:
+        db["users"].update_one({"_id": username}, {"$set": data}, upsert=True)
+    else:
+        _ram_users[username] = data
 
 def add_access_log(username, tag_id, azione, source="APP"):
     now = datetime.utcnow()
@@ -94,11 +98,15 @@ def add_access_log(username, tag_id, azione, source="APP"):
         "source":    source,
         "timestamp": now
     }
-    if db: db["accesses"].insert_one(entry)
-    else:  _ram_access.insert(0, {k:v for k,v in entry.items() if k!="timestamp"})
+    # FIX: confronta con None invece di usare db come booleano
+    if db is not None:
+        db["accesses"].insert_one(entry)
+    else:
+        _ram_access.insert(0, {k:v for k,v in entry.items() if k!="timestamp"})
 
 def get_accesses_list(limit=5):
-    if db:
+    # FIX: confronta con None invece di usare db come booleano
+    if db is not None:
         return list(db["accesses"]
                     .find({}, {"_id": 0, "timestamp": 0})
                     .sort("timestamp", -1)
@@ -178,17 +186,17 @@ def chiudi_porta():
 # ── Accessi ───────────────────────────────────────────────────────────────────
 @app.route("/accessi", methods=["GET"])
 def get_accessi():
-    # ?limit=5 per la home, ?limit=50 per lo storico
     try:
         limit = int(request.args.get("limit", 5))
-        limit = max(1, min(limit, 100))   # clamp tra 1 e 100
+        limit = max(1, min(limit, 100))
     except ValueError:
         limit = 5
     return json_resp(get_accesses_list(limit))
 
 @app.route("/accessi/count", methods=["GET"])
 def get_accessi_count():
-    count = db["accesses"].count_documents({}) if db else len(_ram_access)
+    # FIX: confronta con None invece di usare db come booleano
+    count = db["accesses"].count_documents({}) if db is not None else len(_ram_access)
     return jsonify({"count": count})
 
 @app.route("/nuovo_accesso", methods=["POST"])
@@ -227,7 +235,7 @@ setup_mqtt()
 if __name__ == "__main__":
     print(f"\n{'='*45}")
     print(f"  DOORmotic Flask Server")
-    print(f"  MongoDB:  {'✅ connesso' if db else '❌ RAM only'}")
+    print(f"  MongoDB:  {'✅ connesso' if db is not None else '❌ RAM only'}")
     print(f"  MQTT:     {'✅ ' + MQTT_BROKER if MQTT_BROKER else '❌ non configurato'}")
     print(f"  Admin:    {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
     print(f"{'='*45}\n")

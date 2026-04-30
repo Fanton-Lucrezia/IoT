@@ -5,14 +5,14 @@ const { MongoClient } = require('mongodb');
 // ══════════════════════════════════════════════════════════════════
 // TOPIC MQTT
 //   IN  (ESP32 → broker → worker): doormotic/uid
-//       payload: "UID;STATO"  es. "A08DD33E;0"
-//       STATO: 1 = porta aperta, 0 = porta chiusa
+//       payload JSON: { "uid": "A08DD33E", "stato": true }
+//       stato: true = porta aperta, false = porta chiusa
 //
-//   OUT (worker → broker → ESP32): door/comandi/porta1
+//   OUT (worker → broker → ESP32): doormotic/comandi/porta1
 //       payload: "apri" | "chiudi" | "unauth"
 // ══════════════════════════════════════════════════════════════════
 const TOPIC_IN  = "doormotic/uid";
-const TOPIC_OUT = "door/comandi/porta1";
+const TOPIC_OUT = "doormotic/comandi/porta1";
 
 // ══════════════════════════════════════════════════════════════════
 // MQTT
@@ -83,7 +83,7 @@ async function getOrCreateTag(uid) {
 async function saveLog(tag, azione) {
     const now = new Date();
     await db.collection("accesses").insertOne({
-        username:  tag.label,          // nome visibile nell'app
+        username:  tag.label,
         tag_id:    tag.tag_id,
         orario:    now.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }),
         data:      now.toLocaleDateString("it-IT"),
@@ -98,21 +98,29 @@ async function saveLog(tag, azione) {
 // ══════════════════════════════════════════════════════════════════
 
 /**
- * Payload atteso: "UID;STATO"
- *   UID   = stringa esadecimale del tag, es. "A08DD33E"
- *   STATO = "1" (porta aperta) | "0" (porta chiusa)
+ * Payload atteso (JSON):
+ *   { "uid": "A08DD33E", "stato": true }
+ *   uid   = stringa esadecimale del tag, es. "A08DD33E"
+ *   stato = true (porta aperta) | false (porta chiusa)
  */
-async function handleRfidMessage(payload) {
-    const parts = payload.split(";");
-    if (parts.length < 2) {
-        console.warn("⚠️  Payload malformato:", payload);
+async function handleRfidMessage(rawPayload) {
+    let uid, statoAttuale;
+
+    try {
+        const parsed = JSON.parse(rawPayload);
+        uid          = String(parsed.uid).trim().toUpperCase();
+        statoAttuale = Boolean(parsed.stato); // true = aperta, false = chiusa
+    } catch (e) {
+        console.warn("⚠️  Payload malformato (JSON non valido):", rawPayload);
         return;
     }
 
-    const uid          = parts[0].trim().toUpperCase();
-    const statoAttuale = parts[1].trim(); // "1" o "0"
+    if (!uid) {
+        console.warn("⚠️  Payload mancante del campo 'uid':", rawPayload);
+        return;
+    }
 
-    console.log(`🏷️  Tag: ${uid} | Stato porta attuale: ${statoAttuale === "1" ? "Aperta" : "Chiusa"}`);
+    console.log(`🏷️  Tag: ${uid} | Stato porta attuale: ${statoAttuale ? "Aperta" : "Chiusa"}`);
 
     const tag = await getOrCreateTag(uid);
 
@@ -126,9 +134,9 @@ async function handleRfidMessage(payload) {
     }
 
     // ── Accesso CONSENTITO: inverti lo stato ────────────────────
-    // Se porta è chiusa (0) → manda "apri"
-    // Se porta è aperta (1) → manda "chiudi"
-    if (statoAttuale === "0") {
+    // Se porta è chiusa (false) → manda "apri"
+    // Se porta è aperta (true)  → manda "chiudi"
+    if (!statoAttuale) {
         await saveLog(tag, "Aperta");
         mqttClient.publish(TOPIC_OUT, "apri");
         console.log(`✅ ${tag.label} → Porta APERTA | Pubblicato: apri → ${TOPIC_OUT}`);
