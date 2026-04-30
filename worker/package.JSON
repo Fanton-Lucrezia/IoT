@@ -1,0 +1,14 @@
+{
+  "name": "doormotic-worker",
+  "version": "1.0.0",
+  "description": "Worker MQTT per DOORmotic - gestisce tag RFID e comanda la porta",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "mqtt": "^5.3.4",
+    "mongodb": "^6.3.0"
+  }
+}

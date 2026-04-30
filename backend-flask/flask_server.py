@@ -1,147 +1,171 @@
 """
-DOORmotic - Flask Server con MongoDB
-=====================================
-Dipendenze: pip install flask flask-cors pymongo[srv]
-
-Variabili d'ambiente su Railway:
-  MONGO_URI   → mongodb+srv://user:pass@cluster.mongodb.net/doormotic
-  SECRET_CODE → codice QR (default: DOORMOTIC2026)
-  ADMIN_PASS  → password admin (default: admin)
+DOORmotic - Flask Server
+========================
+Variabili d'ambiente Railway:
+  MONGO_URI    → mongodb+srv://...
+  ADMIN_PASS   → password admin (default: admin)
+  SECRET_CODE  → codice QR (default: DOORMOTIC2026)
+  MQTT_BROKER  → es. xxxx.hivemq.cloud
+  MQTT_PORT    → 8883
+  MQTT_USER    → server
+  MQTT_PASSWORD→ tuapassword
 """
 
-import os
-import json
+import os, json, hashlib, threading
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 from datetime import datetime
-from zoneinfo import ZoneInfo
-import hashlib
-
 from pymongo import MongoClient
+import paho.mqtt.client as mqtt_lib
 
 app = Flask(__name__)
 CORS(app)
 
-# ── Configurazione ────────────────────────────────────────────────────────────
-SECRET_CODE    = os.environ.get("SECRET_CODE", "DOORMOTIC2026")
+# ══════════════════════════════════════════════
+# CONFIGURAZIONE
+# ══════════════════════════════════════════════
+SECRET_CODE    = os.environ.get("SECRET_CODE",   "DOORMOTIC2026")
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASS", "admin")
-MONGO_URI      = os.environ.get("MONGO_URI", "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASS",    "admin")
+MONGO_URI      = os.environ.get("MONGO_URI",     "")
 
-# ── Connessione MongoDB ───────────────────────────────────────────────────────
+MQTT_BROKER    = os.environ.get("MQTT_BROKER",   "")
+MQTT_PORT      = int(os.environ.get("MQTT_PORT", "8883"))
+MQTT_USER      = os.environ.get("MQTT_USER",     "")
+MQTT_PASSWORD  = os.environ.get("MQTT_PASSWORD", "")
+TOPIC_OUT      = "door/comandi/porta1"   # stesso topic del worker
+
+# ══════════════════════════════════════════════
+# MONGODB
+# ══════════════════════════════════════════════
+db = None
 if MONGO_URI:
     client = MongoClient(MONGO_URI)
-    db     = client["doormotic"]
+    db = client["doormotic"]
     print("[DB] MongoDB connesso")
 else:
-    client = None
-    db     = None
-    print("[WARNING] MONGO_URI non impostato — uso RAM")
+    print("[WARNING] MONGO_URI non impostato — modalità RAM")
 
-door_state = {"aperta": False}
+door_state   = {"aperta": False}
+_ram_users   = {}
+_ram_access  = []
 
-# Fallback RAM
-_ram_users    = {}
-_ram_accesses = []
+# ══════════════════════════════════════════════
+# MQTT CLIENT (per comandi remoti app → porta)
+# ══════════════════════════════════════════════
+mqtt_client = None
 
+def setup_mqtt():
+    global mqtt_client
+    if not MQTT_BROKER:
+        print("[MQTT] MQTT_BROKER non impostato — controllo remoto disabilitato")
+        return
 
-# ── Serializzatore JSON sicuro (gestisce datetime e ObjectId) ─────────────────
+    mqtt_client = mqtt_lib.Client(client_id="flask_server", protocol=mqtt_lib.MQTTv311)
+    mqtt_client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+    mqtt_client.tls_set()   # HiveMQ Cloud usa TLS
+
+    def on_connect(client, userdata, flags, rc):
+        if rc == 0:
+            print("[MQTT] Flask connesso al broker ✅")
+        else:
+            print(f"[MQTT] Connessione fallita, rc={rc}")
+
+    def on_disconnect(client, userdata, rc):
+        print(f"[MQTT] Disconnesso (rc={rc}), riconnessione automatica...")
+
+    mqtt_client.on_connect    = on_connect
+    mqtt_client.on_disconnect = on_disconnect
+
+    try:
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        # loop in thread separato — non blocca Flask
+        t = threading.Thread(target=mqtt_client.loop_forever, daemon=True)
+        t.start()
+    except Exception as e:
+        print(f"[MQTT] Errore connessione: {e}")
+        mqtt_client = None
+
+def mqtt_publish(payload: str):
+    """Pubblica un comando sulla porta. payload = 'apri' | 'chiudi'"""
+    if mqtt_client and mqtt_client.is_connected():
+        mqtt_client.publish(TOPIC_OUT, payload)
+        print(f"[MQTT] Pubblicato: {payload} → {TOPIC_OUT}")
+    else:
+        print(f"[MQTT] Non connesso — comando '{payload}' non inviato")
+
+# ══════════════════════════════════════════════
+# HELPERS DB
+# ══════════════════════════════════════════════
+def hash_pw(pw: str) -> str:
+    return hashlib.sha256(pw.encode()).hexdigest()
+
 def safe_json(obj):
-    """Converte tipi MongoDB non serializzabili in stringa."""
     if isinstance(obj, datetime):
         return obj.strftime("%d/%m/%Y %H:%M")
     raise TypeError(f"Non serializzabile: {type(obj)}")
 
-def json_response(data):
-    """Usa json.dumps con il serializzatore sicuro."""
-    return Response(
-        json.dumps(data, default=safe_json),
-        mimetype="application/json"
-    )
+def json_resp(data):
+    return Response(json.dumps(data, default=safe_json), mimetype="application/json")
 
-
-# ── Helpers DB ────────────────────────────────────────────────────────────────
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def get_user(username: str):
+# ── Users ────────────────────────────────────
+def get_user(username):
     if db is not None:
         return db["users"].find_one({"_id": username})
     return _ram_users.get(username)
 
-def save_user(username: str, data: dict):
+def save_user(username, data):
     if db is not None:
         db["users"].update_one({"_id": username}, {"$set": data}, upsert=True)
     else:
         _ram_users[username] = data
 
-def add_access_log(username: str, tag_id: str, azione: str):
-    now = datetime.now(ZoneInfo("Europe/Rome"))
+# ── Accesses ─────────────────────────────────
+def add_access_log(username, tag_id, azione, source="APP"):
+    now = datetime.utcnow()
     entry = {
         "username":  username,
         "tag_id":    tag_id,
         "orario":    now.strftime("%H:%M"),
         "data":      now.strftime("%d/%m/%Y"),
         "azione":    azione,
-        "timestamp": now          # usato solo per ordinamento, non viene mandato all'app
+        "source":    source,
+        "timestamp": now
     }
     if db is not None:
         db["accesses"].insert_one(entry)
     else:
-        _ram_accesses.insert(0, entry.copy())
+        _ram_access.insert(0, {k: v for k, v in entry.items() if k != "timestamp"})
 
 def get_accesses_list():
-    """Restituisce lista di dict senza _id e senza timestamp (non serve all'app)."""
     if db is not None:
-        docs = list(
-            db["accesses"]
-            .find({}, {"_id": 0, "timestamp": 0})   # escludi _id e timestamp
-            .sort("timestamp", -1)
-            .limit(100)
-        )
-        return docs
-    # RAM: rimuovi timestamp
-    return [
-        {k: v for k, v in e.items() if k != "timestamp"}
-        for e in _ram_accesses[:100]
-    ]
+        return list(db["accesses"]
+                    .find({}, {"_id": 0, "timestamp": 0})
+                    .sort("timestamp", -1)
+                    .limit(100))
+    return _ram_access[:100]
 
-def count_accesses():
+# ── Tags ─────────────────────────────────────
+def get_tags_list():
     if db is not None:
-        return db["accesses"].count_documents({})
-    return len(_ram_accesses)
+        return list(db["tags"].find({}, {"_id": 0}))
+    return []
 
-def get_current_door_state():
-    if db is not None:
-        last = db["accesses"].find_one(
-            {},
-            sort=[("timestamp", -1)]
-        )
-        if not last:
-            return False
-        return last.get("azione") == "Aperta"
-
-    # fallback RAM
-    if not _ram_accesses:
-        return False
-    return _ram_accesses[0].get("azione") == "Aperta"
-
-
-# ── Init admin ────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════
+# INIT ADMIN
+# ══════════════════════════════════════════════
 def init_admin():
-    # Aggiorna SEMPRE la password admin all'avvio: cosi' se cambia
-    # ADMIN_PASS su Railway si sincronizza subito con MongoDB
-    admin_data = {
+    save_user(ADMIN_USERNAME, {
         "_id":             ADMIN_USERNAME,
-        "password":        hash_password(ADMIN_PASSWORD),
-        "is_admin":            True,
+        "password":        hash_pw(ADMIN_PASSWORD),
+        "is_admin":        True,
         "has_door_access": True
-    }
-    save_user(ADMIN_USERNAME, admin_data)
-    print(f"[DB] Admin '{ADMIN_USERNAME}' pronto (password sincronizzata)")
+    })
+    print(f"[DB] Admin '{ADMIN_USERNAME}' pronto")
 
-
-# ── Endpoints: Autenticazione ─────────────────────────────────────────────────
+# ══════════════════════════════════════════════
+# ENDPOINTS — AUTENTICAZIONE
+# ══════════════════════════════════════════════
 @app.route("/login", methods=["POST"])
 def login():
     data     = request.json or {}
@@ -150,14 +174,13 @@ def login():
     user = get_user(username)
     if not user:
         return jsonify({"success": False, "message": "Utente non trovato"}), 401
-    if user["password"] != hash_password(password):
+    if user["password"] != hash_pw(password):
         return jsonify({"success": False, "message": "Password errata"}), 401
-
     return jsonify({
-        "success": True,
-        "username": username,
-        "is_admin": user.get("is_admin", False),
-        "has_door_access": user["has_door_access"]
+        "success":         True,
+        "username":        username,
+        "is_admin":        user.get("is_admin", False),
+        "has_door_access": user.get("has_door_access", False)
     })
 
 @app.route("/register", methods=["POST"])
@@ -169,79 +192,106 @@ def register():
     if not username or not password:
         return jsonify({"success": False, "message": "Compila tutti i campi"}), 400
     if len(password) < 6:
-        return jsonify({"success": False, "message": "Password troppo corta (min 6 caratteri)"}), 400
+        return jsonify({"success": False, "message": "Password troppo corta (min 6)"}), 400
     if get_user(username):
         return jsonify({"success": False, "message": "Username già in uso"}), 400
     has_access = (secret_code == SECRET_CODE)
     save_user(username, {
         "_id":             username,
-        "password":        hash_password(password),
-        "is_admin":            True,
+        "password":        hash_pw(password),
+        "is_admin":        False,
         "has_door_access": has_access
     })
-    msg = "Registrazione completata! Hai accesso alla porta." if has_access \
-          else "Registrazione completata. Senza codice non puoi aprire la porta."
+    msg = "Registrato! Hai accesso alla porta." if has_access \
+          else "Registrato. Senza codice non puoi aprire la porta."
     return jsonify({"success": True, "message": msg, "has_door_access": has_access})
 
-
-# ── Endpoints: Porta ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════
+# ENDPOINTS — PORTA
+# ══════════════════════════════════════════════
 @app.route("/stato_porta", methods=["GET"])
 def get_stato():
-    stato = get_current_door_state()
-    return jsonify({
-        "stato": "Aperta" if stato else "Bloccata"
-    })
+    return jsonify({"stato": "Aperta" if door_state["aperta"] else "Bloccata"})
 
 @app.route("/apri_porta", methods=["POST"])
 def apri_porta():
     username = (request.json or {}).get("username", "Utente")
-
+    door_state["aperta"] = True
     add_access_log(username, "APP", "Aperta")
-
+    mqtt_publish("apri")          # ← comando all'ESP32 via MQTT
     return "OK", 200
 
 @app.route("/chiudi_porta", methods=["POST"])
 def chiudi_porta():
     username = (request.json or {}).get("username", "Utente")
-
+    door_state["aperta"] = False
     add_access_log(username, "APP", "Bloccata")
-
+    mqtt_publish("chiudi")        # ← comando all'ESP32 via MQTT
     return "OK", 200
 
-# ── Endpoints: Accessi ────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════
+# ENDPOINTS — ACCESSI
+# ══════════════════════════════════════════════
 @app.route("/accessi", methods=["GET"])
 def get_accessi():
-    return json_response(get_accesses_list())
+    return json_resp(get_accesses_list())
 
 @app.route("/accessi/count", methods=["GET"])
 def get_accessi_count():
-    return jsonify({"count": count_accesses()})
+    count = db["accesses"].count_documents({}) if db is not None else len(_ram_access)
+    return jsonify({"count": count})
 
 @app.route("/nuovo_accesso", methods=["POST"])
 def nuovo_accesso():
+    """Chiamato dall'ESP32 o dal worker per notificare un accesso RFID."""
     tag_id = (request.json or {}).get("id", "UNKNOWN")
-
-    stato_attuale = get_current_door_state()
-
-    # toggle basato su ultimo stato
-    nuovo_stato = not stato_attuale
-    azione = "Aperta" if nuovo_stato else "Bloccata"
-
-    add_access_log("RFID", tag_id, azione)
-
+    door_state["aperta"] = not door_state["aperta"]
+    azione = "Aperta" if door_state["aperta"] else "Bloccata"
+    add_access_log("RFID", tag_id, azione, source="RFID")
     return "OK", 200
 
-# ── Avvio ─────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════
+# ENDPOINTS — GESTIONE TAG (solo admin)
+# ══════════════════════════════════════════════
+@app.route("/tags", methods=["GET"])
+def list_tags():
+    """Lista tutti i tag RFID registrati."""
+    if db is None:
+        return jsonify([])
+    tags = list(db["tags"].find({}, {"_id": 0}))
+    return json_resp(tags)
+
+@app.route("/tags/<tag_id>", methods=["PATCH"])
+def update_tag(tag_id):
+    """
+    Aggiorna label e/o has_door_access di un tag.
+    Body: { "label": "Mario", "has_door_access": true }
+    """
+    if db is None:
+        return jsonify({"success": False, "message": "DB non disponibile"}), 500
+    data = request.json or {}
+    update = {}
+    if "label"           in data: update["label"]           = data["label"]
+    if "has_door_access" in data: update["has_door_access"] = bool(data["has_door_access"])
+    if not update:
+        return jsonify({"success": False, "message": "Nessun campo da aggiornare"}), 400
+    result = db["tags"].update_one({"_id": tag_id.upper()}, {"$set": update})
+    if result.matched_count == 0:
+        return jsonify({"success": False, "message": "Tag non trovato"}), 404
+    return jsonify({"success": True})
+
+# ══════════════════════════════════════════════
+# AVVIO
+# ══════════════════════════════════════════════
 init_admin()
+setup_mqtt()
 
 if __name__ == "__main__":
     print(f"\n{'='*45}")
-    print(f"  DOORmotic Server")
-    print(f"  MongoDB: {'connesso ✓' if db is not None else 'NON connesso (RAM)'}")
-    print(f"  Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
+    print(f"  DOORmotic Flask Server")
+    print(f"  MongoDB:  {'✅ connesso' if db is not None else '❌ RAM only'}")
+    print(f"  MQTT:     {'✅ ' + MQTT_BROKER if MQTT_BROKER else '❌ non configurato'}")
+    print(f"  Admin:    {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
     print(f"  Codice QR: {SECRET_CODE}")
     print(f"{'='*45}\n")
-    #app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
-
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
