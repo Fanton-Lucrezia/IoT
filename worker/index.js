@@ -120,6 +120,18 @@ async function handleRfidMessage(rawPayload) {
         process.exit(1);
     }
 
+    // Pubblica lo stato porta ogni 3 secondi su doormotic/stato/porta1
+    // L'ESP32 lo riceve all'avvio e si sincronizza senza HTTP
+    setInterval(async () => {
+        try {
+            const doc = await db.collection("door_state").findOne({ _id: "porta1" });
+            const stato = doc ? doc.aperta : false;
+            mqttClient.publish(TOPIC_STATO, stato ? "true" : "false");
+        } catch (err) {
+            console.error("❌ Errore publish stato periodico:", err.message);
+        }
+    }, 3000);
+
     mqttClient.on('message', async (topic, message) => {
         const payload = message.toString().trim();
         try {
