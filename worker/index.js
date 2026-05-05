@@ -2,8 +2,9 @@ require('dotenv').config();
 const mqtt = require('mqtt');
 const { MongoClient } = require('mongodb');
 
-const TOPIC_IN  = "doormotic/uid";
-const TOPIC_OUT = "doormotic/comandi/porta1";
+const TOPIC_IN    = "doormotic/uid";
+const TOPIC_OUT   = "doormotic/comandi/porta1";
+const TOPIC_STATO = "doormotic/stato/porta1";
 
 const mqttClient = mqtt.connect(`mqtts://${process.env.MQTT_BROKER}:${process.env.MQTT_PORT}`, {
     username:           process.env.MQTT_USER,
@@ -17,6 +18,10 @@ mqttClient.on('connect', () => {
     mqttClient.subscribe(TOPIC_IN, (err) => {
         if (err) console.error("❌ Errore subscribe:", err.message);
         else     console.log(`👂 In ascolto su: ${TOPIC_IN}`);
+    });
+    mqttClient.subscribe(TOPIC_STATO, (err) => {
+        if (err) console.error("❌ Errore subscribe stato:", err.message);
+        else     console.log(`👂 In ascolto su: ${TOPIC_STATO}`);
     });
 });
 
@@ -116,10 +121,15 @@ async function handleRfidMessage(rawPayload) {
     }
 
     mqttClient.on('message', async (topic, message) => {
+        const payload = message.toString().trim();
         try {
-            await handleRfidMessage(message.toString().trim());
+            if (topic === TOPIC_IN) {
+                await handleRfidMessage(payload);
+            } else if (topic === TOPIC_STATO) {
+                await handleStatoPorta(payload);
+            }
         } catch (err) {
-            console.error("❌ Errore handleRfidMessage:", err.message);
+            console.error("❌ Errore handler:", err.message);
         }
     });
 
@@ -127,6 +137,6 @@ async function handleRfidMessage(rawPayload) {
     console.log("  DOORmotic Worker avviato");
     console.log(`  Ascolto su:  ${TOPIC_IN}`);
     console.log(`  Risponde su: ${TOPIC_OUT}`);
+    console.log(`  Stato su:    ${TOPIC_STATO}`);
     console.log("══════════════════════════════════\n");
 })();
-//modifica

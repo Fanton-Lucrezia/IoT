@@ -117,6 +117,24 @@ def get_accesses_list(limit=5):
         return docs
     return _ram_access[:limit]
 
+# ── Door state DB ────────────────────────────────────────────────────────────
+def get_door_state_db():
+    """Legge lo stato porta dal DB. Fallback su RAM se DB non disponibile."""
+    if db is not None:
+        doc = db["door_state"].find_one({"_id": "porta1"})
+        return doc["aperta"] if doc else False
+    return door_state["aperta"]
+
+def set_door_state_db(aperta: bool):
+    """Scrive lo stato porta sul DB e aggiorna la variabile RAM."""
+    door_state["aperta"] = aperta
+    if db is not None:
+        db["door_state"].update_one(
+            {"_id": "porta1"},
+            {"$set": {"aperta": aperta, "updated_at": datetime.utcnow()}},
+            upsert=True
+        )
+
 # ── Init admin ────────────────────────────────────────────────────────────────
 def init_admin():
     save_user(ADMIN_USERNAME, {
@@ -169,12 +187,13 @@ def register():
 # ── Porta ─────────────────────────────────────────────────────────────────────
 @app.route("/stato_porta", methods=["GET"])
 def get_stato():
-    return jsonify({"stato": "Aperta" if door_state["aperta"] else "Bloccata"})
+    aperta = get_door_state_db()
+    return jsonify({"stato": "Aperta" if aperta else "Bloccata"})
 
 @app.route("/apri_porta", methods=["POST"])
 def apri_porta():
     username = (request.json or {}).get("username", "Utente")
-    door_state["aperta"] = True
+    set_door_state_db(True)
     add_access_log(username, "APP", "Aperta")
     mqtt_publish("true")
     return "OK", 200
@@ -182,7 +201,7 @@ def apri_porta():
 @app.route("/chiudi_porta", methods=["POST"])
 def chiudi_porta():
     username = (request.json or {}).get("username", "Utente")
-    door_state["aperta"] = False
+    set_door_state_db(False)
     add_access_log(username, "APP", "Bloccata")
     mqtt_publish("true")
     return "OK", 200
