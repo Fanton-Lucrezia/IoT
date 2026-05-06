@@ -156,8 +156,13 @@ async function notifyAdmins(title, body) {
 
         for (const admin of admins) {
             if (admin.fcm_token) {
-                await sendFcmNotification(admin.fcm_token, title, body);
-                console.log(`🔔 Notifica inviata all'admin`);
+                console.log(`🔑 Token FCM (primi 20 char): ${admin.fcm_token.substring(0, 20)}...`);
+                try {
+                    await sendFcmNotification(admin.fcm_token, title, body);
+                    console.log(`🔔 Notifica inviata all'admin`);
+                } catch (fcmErr) {
+                    console.error(`❌ Errore FCM dettagliato: ${fcmErr.message}`);
+                }
             }
         }
     } catch (err) {
