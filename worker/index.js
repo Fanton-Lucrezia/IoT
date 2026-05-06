@@ -1,15 +1,8 @@
 require('dotenv').config();
-const mqtt        = require('mqtt');
+const mqtt   = require('mqtt');
 const { MongoClient } = require('mongodb');
-const admin       = require('firebase-admin');
-
-// ── Firebase Admin SDK ────────────────────────────────────────────
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-});
-console.log("✅ Firebase Admin inizializzato");
-
+const https  = require('https');
+const { GoogleAuth } = require('google-auth-library');
 const TOPIC_IN    = "doormotic/uid";
 const TOPIC_OUT   = "doormotic/comandi/porta1";
 const TOPIC_STATO = "doormotic/stato/porta1";
