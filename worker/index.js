@@ -1,6 +1,14 @@
 require('dotenv').config();
-const mqtt = require('mqtt');
+const mqtt        = require('mqtt');
 const { MongoClient } = require('mongodb');
+const admin       = require('firebase-admin');
+
+// ── Firebase Admin SDK ────────────────────────────────────────────
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+console.log("✅ Firebase Admin inizializzato");
 
 const TOPIC_IN    = "doormotic/uid";
 const TOPIC_OUT   = "doormotic/comandi/porta1";
@@ -101,6 +109,10 @@ async function handleRfidMessage(rawPayload) {
         await saveLog(tag, "Non autorizzato");
         mqttClient.publish(TOPIC_OUT, "false");
         console.log(`📤 Pubblicato: false → ${TOPIC_OUT}`);
+        await notifyAdmins(
+            "🚫 Accesso negato",
+            `Tag ${uid} ha tentato di accedere senza autorizzazione`
+        );
         return;
     }
 
@@ -110,6 +122,10 @@ async function handleRfidMessage(rawPayload) {
     await saveLog(tag, azioneLog);
     mqttClient.publish(TOPIC_OUT, "true");
     console.log(`✅ ${tag.label} (${uid}) → autorizzato | Pubblicato: true → ${TOPIC_OUT}`);
+    await notifyAdmins(
+        `🚪 Accesso ${azioneLog}`,
+        `${tag.label} ha ${azioneLog.toLowerCase()} la porta`
+    );
 }
 
 (async () => {

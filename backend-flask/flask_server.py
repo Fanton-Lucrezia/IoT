@@ -251,6 +251,31 @@ def update_tag(tag_id):
         return jsonify({"success": False, "message": "Tag non trovato"}), 404
     return jsonify({"success": True})
 
+# ── FCM Token ────────────────────────────────────────────────────────────────
+@app.route("/admin_fcm_tokens", methods=["GET"])
+def get_admin_fcm_tokens():
+    """Restituisce i token FCM di tutti gli admin — usato dal Worker."""
+    if db is not None:
+        admins = list(db["users"].find(
+            {"is_admin": True, "fcm_token": {"$exists": True}},
+            {"_id": 0, "fcm_token": 1}
+        ))
+        return jsonify([a["fcm_token"] for a in admins if a.get("fcm_token")])
+    return jsonify([])
+
+@app.route("/register_fcm_token", methods=["POST"])
+def register_fcm_token():
+    data     = request.json or {}
+    username = data.get("username", "").strip()
+    token    = data.get("fcm_token", "").strip()
+    if not username or not token:
+        return jsonify({"success": False, "message": "Campi mancanti"}), 400
+    user = get_user(username)
+    if not user or not user.get("is_admin"):
+        return jsonify({"success": False, "message": "Solo gli admin ricevono notifiche"}), 403
+    save_user(username, {"fcm_token": token})
+    return jsonify({"success": True})
+
 # ── Avvio ─────────────────────────────────────────────────────────────────────
 init_admin()
 setup_mqtt()
