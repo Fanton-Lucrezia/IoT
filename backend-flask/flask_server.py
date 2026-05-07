@@ -6,7 +6,7 @@ Variabili Railway:
   MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASSWORD
 """
 
-import os, json, hashlib, threading
+import os, json, hashlib, threading, base64
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 from datetime import datetime, timezone, timedelta
@@ -79,11 +79,9 @@ def json_resp(data):
     return Response(json.dumps(data, default=safe_json), mimetype="application/json")
 
 def get_user(username):
-    # FIX: confronta con None invece di usare db come booleano
     return db["users"].find_one({"_id": username}) if db is not None else _ram_users.get(username)
 
 def save_user(username, data):
-    # FIX: confronta con None invece di usare db come booleano
     if db is not None:
         db["users"].update_one({"_id": username}, {"$set": data}, upsert=True)
     else:
@@ -98,7 +96,6 @@ def add_access_log(username, tag_id, azione, source="APP"):
         "source":    source,
         "timestamp": now
     }
-    # FIX: confronta con None invece di usare db come booleano
     if db is not None:
         db["accesses"].insert_one(entry)
     else:
@@ -110,7 +107,6 @@ def get_accesses_list(limit=5):
                     .find({}, {"_id": 0})
                     .sort("timestamp", -1)
                     .limit(limit))
-        # Ricava orario e data da timestamp per compatibilità con l'app Android
         for doc in docs:
             ts = doc.pop("timestamp", None)
             if ts:
@@ -119,16 +115,14 @@ def get_accesses_list(limit=5):
         return docs
     return _ram_access[:limit]
 
-# ── Door state DB ────────────────────────────────────────────────────────────
+# ── Door state DB ─────────────────────────────────────────────────────────────
 def get_door_state_db():
-    """Legge lo stato porta dal DB. Fallback su RAM se DB non disponibile."""
     if db is not None:
         doc = db["door_state"].find_one({"_id": "porta1"})
         return doc["aperta"] if doc else False
     return door_state["aperta"]
 
 def set_door_state_db(aperta: bool):
-    """Scrive lo stato porta sul DB e aggiorna la variabile RAM."""
     door_state["aperta"] = aperta
     if db is not None:
         db["door_state"].update_one(
@@ -162,7 +156,8 @@ def login():
         "success":         True,
         "username":        username,
         "is_admin":        user.get("is_admin", False),
-        "has_door_access": user.get("has_door_access", False)
+        "has_door_access": user.get("has_door_access", False),
+        "profile_picture": user.get("profile_picture", None)
     })
 
 @app.route("/register", methods=["POST"])
@@ -220,7 +215,6 @@ def get_accessi():
 
 @app.route("/accessi/count", methods=["GET"])
 def get_accessi_count():
-    # FIX: confronta con None invece di usare db come booleano
     count = db["accesses"].count_documents({}) if db is not None else len(_ram_access)
     return jsonify({"count": count})
 
@@ -253,10 +247,79 @@ def update_tag(tag_id):
         return jsonify({"success": False, "message": "Tag non trovato"}), 404
     return jsonify({"success": True})
 
-# ── FCM Token ────────────────────────────────────────────────────────────────
+# ── Utenti (admin) ────────────────────────────────────────────────────────────
+@app.route("/users", methods=["GET"])
+def list_users():
+    """Restituisce tutti gli utenti non-admin. Solo per admin."""
+    if db is None:
+        return jsonify([])
+    users = list(db["users"].find(
+        {"is_admin": {"$ne": True}},
+        {"_id": 1, "has_door_access": 1, "profile_picture": 1}
+    ))
+    result = []
+    for u in users:
+        result.append({
+            "username":        u["_id"],
+            "has_door_access": u.get("has_door_access", False)
+        })
+    return json_resp(result)
+
+@app.route("/users/<username>", methods=["PATCH"])
+def update_user(username):
+    """Modifica has_door_access di un utente. Solo admin dovrebbe chiamarlo."""
+    if db is None:
+        return jsonify({"success": False, "message": "DB non disponibile"}), 500
+    data   = request.json or {}
+    update = {}
+    if "has_door_access" in data:
+        update["has_door_access"] = bool(data["has_door_access"])
+    if not update:
+        return jsonify({"success": False, "message": "Nessun campo da aggiornare"}), 400
+    result = db["users"].update_one({"_id": username}, {"$set": update})
+    if result.matched_count == 0:
+        return jsonify({"success": False, "message": "Utente non trovato"}), 404
+    return jsonify({"success": True})
+
+@app.route("/users/<username>/password", methods=["PATCH"])
+def change_password(username):
+    """Cambia la password di un utente dopo verifica della vecchia."""
+    data         = request.json or {}
+    old_password = data.get("old_password", "")
+    new_password = data.get("new_password", "")
+    if not old_password or not new_password:
+        return jsonify({"success": False, "message": "Campi mancanti"}), 400
+    if len(new_password) < 6:
+        return jsonify({"success": False, "message": "Nuova password troppo corta (min 6 caratteri)"}), 400
+    user = get_user(username)
+    if not user:
+        return jsonify({"success": False, "message": "Utente non trovato"}), 404
+    if user["password"] != hash_pw(old_password):
+        return jsonify({"success": False, "message": "Password attuale errata"}), 401
+    save_user(username, {"password": hash_pw(new_password)})
+    return jsonify({"success": True, "message": "Password aggiornata con successo"})
+
+@app.route("/users/<username>/profile_picture", methods=["PATCH"])
+def update_profile_picture(username):
+    """Salva la foto profilo come stringa Base64."""
+    data    = request.json or {}
+    pic_b64 = data.get("profile_picture", "").strip()
+    if not pic_b64:
+        return jsonify({"success": False, "message": "Immagine mancante"}), 400
+    # Validazione base: deve essere una stringa Base64 valida
+    try:
+        base64.b64decode(pic_b64, validate=True)
+    except Exception:
+        return jsonify({"success": False, "message": "Formato immagine non valido"}), 400
+    user = get_user(username)
+    if not user:
+        return jsonify({"success": False, "message": "Utente non trovato"}), 404
+    save_user(username, {"profile_picture": pic_b64})
+    return jsonify({"success": True, "message": "Foto profilo aggiornata"})
+
+# ── FCM Token ─────────────────────────────────────────────────────────────────
 @app.route("/admin_fcm_tokens", methods=["GET"])
 def get_admin_fcm_tokens():
-    """Restituisce i token FCM di tutti gli admin — usato dal Worker."""
     if db is not None:
         admins = list(db["users"].find(
             {"is_admin": True, "fcm_token": {"$exists": True}},
