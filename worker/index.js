@@ -4,16 +4,8 @@ const { MongoClient } = require('mongodb');
 const https  = require('https');
 const { GoogleAuth } = require('google-auth-library');
 
-// Ora italiana (CEST UTC+2, CET UTC+1)
-// Cambia l'offset a 1 in inverno
-function nowItaly() {
-    const d = new Date();
-    d.setHours(d.getHours() + 2);
-    return d;
-}
-
-const TOPIC_IN    = "doormotic/uid";
-const TOPIC_OUT   = "doormotic/comandi/porta1";
+const TOPIC_UID   = "doormotic/uid";
+const TOPIC_AUTH  = "doormotic/autorizzazioni/porta1";
 const TOPIC_STATO = "doormotic/stato/porta1";
 
 // ══════════════════════════════════════════════════════════════════
@@ -28,11 +20,14 @@ const mqttClient = mqtt.connect(`mqtts://${process.env.MQTT_BROKER}:${process.en
 
 mqttClient.on('connect', () => {
     console.log("✅ MQTT connesso");
-    mqttClient.subscribe(TOPIC_IN, (err) => {
+    mqttClient.subscribe(TOPIC_UID, (err) => {
         if (err) console.error("❌ Errore subscribe uid:", err.message);
-        else     console.log(`👂 In ascolto su: ${TOPIC_IN}`);
+        else     console.log(`👂 In ascolto su: ${TOPIC_UID}`);
     });
-
+    mqttClient.subscribe(TOPIC_STATO, (err) => {
+        if (err) console.error("❌ Errore subscribe stato:", err.message);
+        else     console.log(`👂 In ascolto su: ${TOPIC_STATO}`);
+    });
 });
 
 mqttClient.on('error',     (err) => console.error("❌ Errore MQTT:", err.message));
@@ -55,6 +50,12 @@ async function connectDB() {
 // ══════════════════════════════════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════════════════════════════════
+function nowItaly() {
+    const d = new Date();
+    d.setHours(d.getHours() + 2);
+    return d;
+}
+
 async function getOrCreateTag(uid) {
     const tags = db.collection("tags");
     let tag = await tags.findOne({ _id: uid });
@@ -72,23 +73,22 @@ async function getOrCreateTag(uid) {
     return tag;
 }
 
-async function updateDoorState(statoAperta) {
-    await db.collection("door_state").updateOne(
-        { _id: "porta1" },
-        { $set: { aperta: statoAperta, updated_at: new Date() } },
-        { upsert: true }
-    );
-}
-
 async function saveLog(tag, azione) {
-    const now = nowItaly();
     await db.collection("accesses").insertOne({
         username:  tag.label,
         tag_id:    tag.tag_id,
         azione:    azione,
         source:    "RFID",
-        timestamp: now
+        timestamp: nowItaly()
     });
+}
+
+async function updateDoorState(aperta) {
+    await db.collection("door_state").updateOne(
+        { _id: "porta1" },
+        { $set: { aperta, updated_at: new Date() } },
+        { upsert: true }
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -108,18 +108,13 @@ async function getFcmAccessToken() {
 async function sendFcmNotification(fcmToken, title, body) {
     const projectId   = process.env.FCM_PROJECT_ID;
     const accessToken = await getFcmAccessToken();
-
     const payload = JSON.stringify({
         message: {
             token: fcmToken,
             notification: { title, body },
-            android: {
-                priority: "high",
-                notification: { sound: "default" }
-            }
+            android: { priority: "high", notification: { sound: "default" } }
         }
     });
-
     return new Promise((resolve, reject) => {
         const req = https.request({
             hostname: 'fcm.googleapis.com',
@@ -134,11 +129,8 @@ async function sendFcmNotification(fcmToken, title, body) {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                if (res.statusCode === 200) {
-                    resolve();
-                } else {
-                    reject(new Error(`FCM error ${res.statusCode}: ${data}`));
-                }
+                if (res.statusCode === 200) resolve();
+                else reject(new Error(`FCM error ${res.statusCode}: ${data}`));
             });
         });
         req.on('error', reject);
@@ -153,96 +145,85 @@ async function notifyAdmins(title, body) {
             { is_admin: true, fcm_token: { $exists: true } },
             { projection: { fcm_token: 1 } }
         ).toArray();
-
         if (admins.length === 0) {
-            console.log("⚠️  Nessun admin con token FCM trovato");
+            console.log("⚠️  Nessun admin con token FCM");
             return;
         }
-
         for (const admin of admins) {
             if (admin.fcm_token) {
-                console.log(`🔑 Token FCM (primi 20 char): ${admin.fcm_token.substring(0, 20)}...`);
                 try {
                     await sendFcmNotification(admin.fcm_token, title, body);
                     console.log(`🔔 Notifica inviata all'admin`);
                 } catch (fcmErr) {
-                    console.error(`❌ Errore FCM dettagliato: ${fcmErr.message}`);
+                    console.error(`❌ Errore FCM: ${fcmErr.message}`);
                 }
             }
         }
     } catch (err) {
-        console.error("❌ Errore notifica admin:", err.message);
+        console.error("❌ Errore notifyAdmins:", err.message);
     }
 }
 
 // ══════════════════════════════════════════════════════════════════
-// HANDLER RFID
+// HANDLER UID — gestione accesso RFID
 // ══════════════════════════════════════════════════════════════════
 async function handleRfidMessage(rawPayload) {
     let uid, statoAttuale;
     try {
         const parsed = JSON.parse(rawPayload);
         uid          = String(parsed.uid).trim().toUpperCase();
-        statoAttuale = Boolean(parsed.stato);
+        statoAttuale = parsed.stato === "true" || parsed.stato === true;
     } catch (e) {
-        console.warn("⚠️  Payload malformato (JSON non valido):", rawPayload);
+        console.warn("⚠️  Payload malformato:", rawPayload);
         return;
     }
-    if (!uid) {
-        console.warn("⚠️  Campo 'uid' mancante:", rawPayload);
-        return;
-    }
+    if (!uid) { console.warn("⚠️  UID mancante"); return; }
 
-    console.log(`🏷️  Tag: ${uid} | Stato porta attuale: ${statoAttuale ? "Aperta" : "Chiusa"}`);
+    console.log(`🏷️  Tag: ${uid} | Stato attuale: ${statoAttuale ? "Aperta" : "Chiusa"}`);
 
     const tag = await getOrCreateTag(uid);
 
     if (!tag.has_door_access) {
-        // Accesso NEGATO — non aggiornare lo stato porta nel DB
-        console.log(`🚫 Accesso negato per: ${tag.label} (${uid})`);
+        console.log(`🚫 Accesso negato: ${tag.label} (${uid})`);
         await saveLog(tag, "Non autorizzato");
-        mqttClient.publish(TOPIC_OUT, "false");
-        console.log(`📤 Pubblicato: false → ${TOPIC_OUT}`);
-        const nomeNegato = tag.label === "Sconosciuto" ? `Tag sconosciuto (${uid})` : tag.label;
-        await notifyAdmins(
-            "🚫 Accesso negato",
-            `${nomeNegato} ha tentato di accedere senza autorizzazione`
-        );
+        mqttClient.publish(TOPIC_AUTH, "unauth");
+        const nome = tag.label === "Sconosciuto" ? `Tag sconosciuto (${uid})` : tag.label;
+        await notifyAdmins("🚫 Accesso negato", `${nome} ha tentato di accedere`);
         return;
     }
 
-    // Accesso CONSENTITO — il servo si muoverà, il nuovo stato è l'opposto di quello attuale
-    const nuovoStato = !statoAttuale;
-    await updateDoorState(nuovoStato);
-
-    const azioneLog = nuovoStato ? "Aperta" : "Bloccata";
+    // Autorizzato — il log registra l'azione che il servo sta per fare
+    const azioneLog = statoAttuale ? "Bloccata" : "Aperta";
     await saveLog(tag, azioneLog);
-    mqttClient.publish(TOPIC_OUT, "true");
-    console.log(`✅ ${tag.label} (${uid}) → autorizzato | Pubblicato: true → ${TOPIC_OUT}`);
+    mqttClient.publish(TOPIC_AUTH, "auth");
+    console.log(`✅ ${tag.label} (${uid}) → auth | Azione: ${azioneLog}`);
 
-    const nomeAutorizzato = tag.label === "Sconosciuto" ? `Tag ${uid}` : tag.label;
-    const messaggioNotifica = nuovoStato
-        ? `${nomeAutorizzato} ha aperto la porta`
-        : `${nomeAutorizzato} ha chiuso la porta`;
+    const nome = tag.label === "Sconosciuto" ? `Tag ${uid}` : tag.label;
     await notifyAdmins(
-        nuovoStato ? "🔓 Porta aperta" : "🔒 Porta chiusa",
-        messaggioNotifica
+        azioneLog === "Aperta" ? "🔓 Porta aperta" : "🔒 Porta chiusa",
+        azioneLog === "Aperta" ? `${nome} ha aperto la porta` : `${nome} ha chiuso la porta`
     );
 }
 
 // ══════════════════════════════════════════════════════════════════
-// PUBLISH STATO PERIODICO (ogni 3 secondi)
+// HANDLER STATO PORTA — risposta ESP32 a "richiesta stato"
 // ══════════════════════════════════════════════════════════════════
-async function startStatoInterval() {
-    setInterval(async () => {
-        try {
-            const doc   = await db.collection("door_state").findOne({ _id: "porta1" });
-            const stato = doc ? doc.aperta : false;
-            mqttClient.publish(TOPIC_STATO, stato ? "true" : "false");
-        } catch (err) {
-            console.error("❌ Errore publish stato periodico:", err.message);
-        }
-    }, 3000);
+async function handleStatoPorta(payload) {
+    // Ignora i messaggi mandati dal Worker stesso
+    if (payload === "richiesta stato") return;
+
+    const aperta = payload === "aperta";
+    await updateDoorState(aperta);
+    console.log(`🚪 Stato porta: ${aperta ? "Aperta" : "Chiusa"}`);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RICHIESTA STATO PERIODICA — ogni 4 secondi
+// ══════════════════════════════════════════════════════════════════
+function startStatoPolling() {
+    setInterval(() => {
+        mqttClient.publish(TOPIC_STATO, "richiesta stato");
+    }, 4000);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -252,27 +233,29 @@ async function startStatoInterval() {
     try {
         await connectDB();
     } catch (err) {
-        console.error("❌ Errore connessione MongoDB:", err.message);
+        console.error("❌ Errore MongoDB:", err.message);
         process.exit(1);
     }
 
     mqttClient.on('message', async (topic, message) => {
         const payload = message.toString().trim();
         try {
-            if (topic === TOPIC_IN) {
+            if (topic === TOPIC_UID) {
                 await handleRfidMessage(payload);
+            } else if (topic === TOPIC_STATO) {
+                await handleStatoPorta(payload);
             }
         } catch (err) {
             console.error("❌ Errore handler:", err.message);
         }
     });
 
-    await startStatoInterval();
+    startStatoPolling();
 
     console.log("\n══════════════════════════════════");
     console.log("  DOORmotic Worker avviato");
-    console.log(`  Ascolto su:  ${TOPIC_IN}`);
-    console.log(`  Risponde su: ${TOPIC_OUT}`);
-    console.log(`  Stato su:    ${TOPIC_STATO}`);
+    console.log(`  UID:    ${TOPIC_UID}`);
+    console.log(`  Auth:   ${TOPIC_AUTH}`);
+    console.log(`  Stato:  ${TOPIC_STATO}`);
     console.log("══════════════════════════════════\n");
 })();

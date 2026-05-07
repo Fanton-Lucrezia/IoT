@@ -26,7 +26,7 @@ MQTT_BROKER    = os.environ.get("MQTT_BROKER",   "")
 MQTT_PORT      = int(os.environ.get("MQTT_PORT", "8883"))
 MQTT_USER      = os.environ.get("MQTT_USER",     "")
 MQTT_PASSWORD  = os.environ.get("MQTT_PASSWORD", "")
-TOPIC_OUT      = "doormotic/comandi/porta1"
+TOPIC_COMANDI  = "doormotic/comandi/porta1"
 
 # ── MongoDB ───────────────────────────────────────────────────────────────────
 db = None
@@ -63,7 +63,7 @@ def setup_mqtt():
 
 def mqtt_publish(payload: str):
     if mqtt_client and mqtt_client.is_connected():
-        mqtt_client.publish(TOPIC_OUT, payload)
+        mqtt_client.publish(TOPIC_COMANDI, payload)
         print(f"[MQTT] → {payload}")
     else:
         print(f"[MQTT] Non connesso — '{payload}' non inviato")
@@ -195,17 +195,15 @@ def get_stato():
 @app.route("/apri_porta", methods=["POST"])
 def apri_porta():
     username = (request.json or {}).get("username", "Utente")
-    set_door_state_db(True)
     add_access_log(username, "APP", "Aperta")
-    mqtt_publish("true")
+    mqtt_publish("apri")
     return "OK", 200
 
 @app.route("/chiudi_porta", methods=["POST"])
 def chiudi_porta():
     username = (request.json or {}).get("username", "Utente")
-    set_door_state_db(False)
     add_access_log(username, "APP", "Bloccata")
-    mqtt_publish("true")
+    mqtt_publish("chiudi")
     return "OK", 200
 
 # ── Accessi ───────────────────────────────────────────────────────────────────
