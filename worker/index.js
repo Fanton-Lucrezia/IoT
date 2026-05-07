@@ -217,7 +217,7 @@ async function handleRfidMessage(rawPayload) {
 
     const azioneLog = nuovoStato ? "Aperta" : "Bloccata";
     await saveLog(tag, azioneLog);
-    mqttClient.publish(TOPIC_OUT, "true");
+    mqttClient.publish(TOPIC_OUT, nuovoStato);
     console.log(`✅ ${tag.label} (${uid}) → autorizzato | Pubblicato: true → ${TOPIC_OUT}`);
 
     const nomeAutorizzato = tag.label === "Sconosciuto" ? `Tag ${uid}` : tag.label;
@@ -238,7 +238,7 @@ async function startStatoInterval() {
         try {
             const doc   = await db.collection("door_state").findOne({ _id: "porta1" });
             const stato = doc ? doc.aperta : false;
-            mqttClient.publish(TOPIC_STATO, stato ? "true" : "false");
+            mqttClient.publish(TOPIC_STATO, stato ? true : false);
         } catch (err) {
             console.error("❌ Errore publish stato periodico:", err.message);
         }
