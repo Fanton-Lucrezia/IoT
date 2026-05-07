@@ -276,3 +276,4 @@ async function startStatoInterval() {
     console.log(`  Stato su:    ${TOPIC_STATO}`);
     console.log("══════════════════════════════════\n");
 })();
+//test
