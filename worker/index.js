@@ -32,10 +32,7 @@ mqttClient.on('connect', () => {
         if (err) console.error("❌ Errore subscribe uid:", err.message);
         else     console.log(`👂 In ascolto su: ${TOPIC_IN}`);
     });
-    mqttClient.subscribe(TOPIC_STATO, (err) => {
-        if (err) console.error("❌ Errore subscribe stato:", err.message);
-        else     console.log(`👂 In ascolto su: ${TOPIC_STATO}`);
-    });
+
 });
 
 mqttClient.on('error',     (err) => console.error("❌ Errore MQTT:", err.message));
@@ -179,19 +176,6 @@ async function notifyAdmins(title, body) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// HANDLER STATO PORTA
-// ══════════════════════════════════════════════════════════════════
-async function handleStatoPorta(payload) {
-    const aperta = payload === "true";
-    await db.collection("door_state").updateOne(
-        { _id: "porta1" },
-        { $set: { aperta, updated_at: new Date() } },
-        { upsert: true }
-    );
-    console.log(`🚪 Stato porta aggiornato: ${aperta ? "Aperta" : "Chiusa"}`);
-}
-
-// ══════════════════════════════════════════════════════════════════
 // HANDLER RFID
 // ══════════════════════════════════════════════════════════════════
 async function handleRfidMessage(rawPayload) {
@@ -277,8 +261,6 @@ async function startStatoInterval() {
         try {
             if (topic === TOPIC_IN) {
                 await handleRfidMessage(payload);
-            } else if (topic === TOPIC_STATO) {
-                await handleStatoPorta(payload);
             }
         } catch (err) {
             console.error("❌ Errore handler:", err.message);
