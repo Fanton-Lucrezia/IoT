@@ -4,6 +4,14 @@ const { MongoClient } = require('mongodb');
 const https  = require('https');
 const { GoogleAuth } = require('google-auth-library');
 
+// Ora italiana (CEST UTC+2, CET UTC+1)
+// Cambia l'offset a 1 in inverno
+function nowItaly() {
+    const d = new Date();
+    d.setHours(d.getHours() + 2);
+    return d;
+}
+
 const TOPIC_IN    = "doormotic/uid";
 const TOPIC_OUT   = "doormotic/comandi/porta1";
 const TOPIC_STATO = "doormotic/stato/porta1";
@@ -76,7 +84,7 @@ async function updateDoorState(statoAperta) {
 }
 
 async function saveLog(tag, azione) {
-    const now = new Date();
+    const now = nowItaly();
     await db.collection("accesses").insertOne({
         username:  tag.label,
         tag_id:    tag.tag_id,
@@ -201,31 +209,40 @@ async function handleRfidMessage(rawPayload) {
         return;
     }
 
-    console.log(`🏷️  Tag: ${uid} | Stato porta: ${statoAttuale ? "Aperta" : "Chiusa"}`);
-
-    await updateDoorState(statoAttuale);
+    console.log(`🏷️  Tag: ${uid} | Stato porta attuale: ${statoAttuale ? "Aperta" : "Chiusa"}`);
 
     const tag = await getOrCreateTag(uid);
 
     if (!tag.has_door_access) {
+        // Accesso NEGATO — non aggiornare lo stato porta nel DB
         console.log(`🚫 Accesso negato per: ${tag.label} (${uid})`);
         await saveLog(tag, "Non autorizzato");
         mqttClient.publish(TOPIC_OUT, "false");
         console.log(`📤 Pubblicato: false → ${TOPIC_OUT}`);
+        const nomeNegato = tag.label === "Sconosciuto" ? `Tag sconosciuto (${uid})` : tag.label;
         await notifyAdmins(
             "🚫 Accesso negato",
-            `Tag ${uid} ha tentato di accedere senza autorizzazione`
+            `${nomeNegato} ha tentato di accedere senza autorizzazione`
         );
         return;
     }
 
-    const azioneLog = statoAttuale ? "Aperta" : "Bloccata";
+    // Accesso CONSENTITO — il servo si muoverà, il nuovo stato è l'opposto di quello attuale
+    const nuovoStato = !statoAttuale;
+    await updateDoorState(nuovoStato);
+
+    const azioneLog = nuovoStato ? "Aperta" : "Bloccata";
     await saveLog(tag, azioneLog);
     mqttClient.publish(TOPIC_OUT, "true");
     console.log(`✅ ${tag.label} (${uid}) → autorizzato | Pubblicato: true → ${TOPIC_OUT}`);
+
+    const nomeAutorizzato = tag.label === "Sconosciuto" ? `Tag ${uid}` : tag.label;
+    const messaggioNotifica = nuovoStato
+        ? `${nomeAutorizzato} ha aperto la porta`
+        : `${nomeAutorizzato} ha chiuso la porta`;
     await notifyAdmins(
-        `🚪 Accesso ${azioneLog}`,
-        `${tag.label} ha ${azioneLog.toLowerCase()} la porta`
+        nuovoStato ? "🔓 Porta aperta" : "🔒 Porta chiusa",
+        messaggioNotifica
     );
 }
 

@@ -9,7 +9,9 @@ Variabili Railway:
 import os, json, hashlib, threading
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+ITALY = timezone(timedelta(hours=2))  # CEST (ora legale); cambia a hours=1 in inverno (CET)
 from pymongo import MongoClient
 import paho.mqtt.client as mqtt_lib
 
@@ -88,7 +90,7 @@ def save_user(username, data):
         _ram_users[username] = data
 
 def add_access_log(username, tag_id, azione, source="APP"):
-    now = datetime.utcnow()
+    now = datetime.now(ITALY)
     entry = {
         "username":  username,
         "tag_id":    tag_id,
@@ -131,7 +133,7 @@ def set_door_state_db(aperta: bool):
     if db is not None:
         db["door_state"].update_one(
             {"_id": "porta1"},
-            {"$set": {"aperta": aperta, "updated_at": datetime.utcnow()}},
+            {"$set": {"aperta": aperta, "updated_at": datetime.now(ITALY)}},
             upsert=True
         )
 
